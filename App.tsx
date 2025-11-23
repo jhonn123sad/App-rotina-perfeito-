@@ -160,37 +160,34 @@ const App: React.FC = () => {
     }
   };
 
-  // Reset Day - Using DELETE to remove the row entirely for a clean state
+  // Reset Day
   const handleResetDay = async () => {
     if (!supabase) return;
     if (!window.confirm(`Tem certeza que deseja zerar o progresso do dia ${currentDate}?`)) return;
 
     setSaveStatus('saving');
     
-    // Optimistic clear
-    setDailyTasks({}); 
+    // Explicitly sending empty object
+    const emptyTasks = {};
+    setDailyTasks(emptyTasks); // Optimistic
 
-    // We use delete() instead of upsert({}) to ensure a truly clean state.
-    // This requires DELETE permission in RLS.
     const { error } = await supabase
       .from(TABLE_NAME)
-      .delete()
-      .eq('date', currentDate);
+      .upsert({
+        date: currentDate,
+        tasks: emptyTasks,
+        points: 0
+      }); 
     
     if (!error) {
       setShowResetMenu(false);
       setSaveStatus('saved');
-      fetchHistory(); 
+      fetchHistory(); // Refresh chart
       setTimeout(() => setSaveStatus('idle'), 2000);
     } else {
       console.error("Reset Day Error:", error);
       setSaveStatus('error');
-      // Explicit feedback about RLS
-      if (error.code === '42501') {
-         alert("ERRO DE PERMISSÃO: O Supabase bloqueou o comando DELETE.\n\nCopie o código SQL do arquivo 'services/supabase.ts' e rode no SQL Editor do Supabase para liberar a permissão.");
-      } else {
-         alert(`Erro ao resetar: ${error.message}`);
-      }
+      alert("Erro ao resetar. Verifique se rodou o SQL de permissões.");
     }
   };
 
@@ -203,21 +200,17 @@ const App: React.FC = () => {
 
     setSaveStatus('saving');
 
-    // Using delete with a filter that matches all strings (greater than empty string)
-    // This is more robust than .neq for Primary Key text columns.
+    // Using delete with a generic filter that matches everything
+    // Note: RLS Policy must allow DELETE for this to work
     const { error } = await supabase
       .from(TABLE_NAME)
       .delete()
-      .gt('date', ''); 
+      .neq('date', '0000-00-00'); // Deletes all rows where date is not dummy value
 
     if (error) {
+      alert('Erro ao resetar app. Verifique se você rodou o novo código SQL no Supabase para permitir DELETE.');
       console.error("Reset App Error:", error);
       setSaveStatus('error');
-      if (error.code === '42501') {
-         alert("ERRO DE PERMISSÃO: O Supabase bloqueou o comando DELETE.\n\nVerifique o arquivo 'services/supabase.ts' e rode o SQL necessário.");
-      } else {
-         alert(`Erro ao resetar app: ${error.message}`);
-      }
     } else {
       setDailyTasks({});
       setChartData([]);

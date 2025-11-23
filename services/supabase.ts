@@ -3,36 +3,27 @@ import { createClient } from '@supabase/supabase-js';
 // INSTRUCTIONS FOR USER:
 // 1. The table `daily_logs` must exist in your Supabase project.
 /*
-  === CÓDIGO SQL PARA RODAR NO SUPABASE (SQL EDITOR) ===
-  Copie e rode tudo abaixo para corrigir o botão de Reset/Delete:
-
-  -- 1. Limpeza NUCLEAR de permissões antigas (Remove tudo que pode estar bloqueando)
-  drop policy if exists "Enable all access" on public.daily_logs;
-  drop policy if exists "Acesso Total" on public.daily_logs;
-  drop policy if exists "Acesso Irrestrito" on public.daily_logs;
-  drop policy if exists "Super Policy Access" on public.daily_logs;
-  drop policy if exists "Permissao_Suprema_Delete" on public.daily_logs;
-  drop policy if exists "Enable read access for all users" on public.daily_logs;
-  drop policy if exists "Enable insert for authenticated users only" on public.daily_logs;
-  drop policy if exists "Enable delete for users based on user_id" on public.daily_logs;
+  -- Execute these commands in Supabase SQL Editor to fix permissions and resets:
   
-  -- 2. Garante a tabela e RLS
   create table if not exists public.daily_logs (
     date text primary key,
     tasks jsonb default '{}'::jsonb,
     points integer default 0,
     created_at timestamp with time zone default timezone('utc'::text, now())
   );
-  
+
+  -- Enable Realtime
   alter publication supabase_realtime add table public.daily_logs;
+  
+  -- IMPORTANT: Fix Permissions (RLS) for DELETE/UPDATE
   alter table public.daily_logs enable row level security;
   
-  -- 3. Cria a política DEFINITIVA (Libera DELETE, UPDATE, INSERT, SELECT)
-  create policy "Permissao_Suprema_Delete" 
-  on public.daily_logs 
-  for all 
-  using (true) 
-  with check (true);
+  -- Remove old policies to avoid conflicts
+  drop policy if exists "Enable all access" on public.daily_logs;
+  drop policy if exists "Acesso Total" on public.daily_logs;
+  
+  -- Create a permissive policy for the demo
+  create policy "Acesso Irrestrito" on public.daily_logs for all using (true) with check (true);
 */
 
 // Credentials provided
