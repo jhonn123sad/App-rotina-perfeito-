@@ -1,0 +1,5 @@
+{
+  "name": "30-Day Challenge",
+  "description": "A disciplined daily task tracker with Supabase integration, real-time updates, and progress analytics.",
+  "requestFramePermissions": []
+}
