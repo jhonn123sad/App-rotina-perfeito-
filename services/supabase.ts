@@ -3,9 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 // INSTRUCTIONS FOR USER:
 // 1. The table `daily_logs` must exist in your Supabase project.
 /*
-  -- Execute these commands in Supabase SQL Editor to fix permissions and resets:
-  
-  create table if not exists public.daily_logs (
+  create table public.daily_logs (
     date text primary key,
     tasks jsonb default '{}'::jsonb,
     points integer default 0,
@@ -15,15 +13,9 @@ import { createClient } from '@supabase/supabase-js';
   -- Enable Realtime
   alter publication supabase_realtime add table public.daily_logs;
   
-  -- IMPORTANT: Fix Permissions (RLS) for DELETE/UPDATE
+  -- IMPORTANT: IF YOU SEE ERRORS, YOU LIKELY NEED TO ENABLE ACCESS VIA RLS POLICIES:
   alter table public.daily_logs enable row level security;
-  
-  -- Remove old policies to avoid conflicts
-  drop policy if exists "Enable all access" on public.daily_logs;
-  drop policy if exists "Acesso Total" on public.daily_logs;
-  
-  -- Create a permissive policy for the demo
-  create policy "Acesso Irrestrito" on public.daily_logs for all using (true) with check (true);
+  create policy "Enable all access" on public.daily_logs for all using (true) with check (true);
 */
 
 // Credentials provided

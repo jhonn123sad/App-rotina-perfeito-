@@ -1,40 +1,23 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { supabase, TABLE_NAME } from './services/supabase';
-import { TASK_LIST } from './constants';
-import { TaskSection, ChartDataPoint } from './types';
+import { TASK_LIST, MAX_DAILY_POINTS } from './constants';
+import { TaskSection, DailyLog, ChartDataPoint } from './types';
 import { Header } from './components/Header';
 import { Section } from './components/Section';
 import { Stats } from './components/Stats';
 import { SetupGuide } from './components/SetupGuide';
-import { Sun, Sunset, Moon, RotateCcw, Trash2 } from 'lucide-react';
+import { Sun, Sunset, Moon, RotateCcw, AlertOctagon } from 'lucide-react';
 
-// Utility to get today's date in YYYY-MM-DD based on LOCAL time, not UTC
-const getLocalToday = () => {
-  const date = new Date();
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
+// Utility to get today's date as YYYY-MM-DD
+const getToday = () => new Date().toISOString().split('T')[0];
 
 const App: React.FC = () => {
-  const [currentDate, setCurrentDate] = useState<string>(getLocalToday());
+  const [currentDate, setCurrentDate] = useState<string>(getToday());
   const [dailyTasks, setDailyTasks] = useState<Record<string, boolean>>({});
-  
-  // Ref to hold the latest tasks state for async operations to avoid stale closures
-  const tasksRef = useRef<Record<string, boolean>>({});
-
   const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [isLoading, setIsLoading] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [showResetMenu, setShowResetMenu] = useState(false);
   const [isSupabaseConfigured, setIsSupabaseConfigured] = useState(!!supabase);
-
-  // Sync Ref with State
-  useEffect(() => {
-    tasksRef.current = dailyTasks;
-  }, [dailyTasks]);
 
   // Fetch data for selected date
   const fetchDayData = useCallback(async (date: string) => {
@@ -48,7 +31,7 @@ const App: React.FC = () => {
         .eq('date', date)
         .single();
 
-      if (error && error.code !== 'PGRST116') { 
+      if (error && error.code !== 'PGRST116') { // PGRST116 is "Row not found", which is fine
         console.error('Error fetching day:', error);
       }
 
@@ -64,7 +47,7 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Fetch history for chart (Last 30 records)
+  // Fetch history for chart (Last 30 days)
   const fetchHistory = useCallback(async () => {
     if (!supabase) return;
 
@@ -81,8 +64,8 @@ const App: React.FC = () => {
 
     // Transform to chart friendly format
     const formatted: ChartDataPoint[] = (data || []).map((entry: any) => ({
-      fullDate: entry.date.split('-').reverse().join('/'), // DD/MM/YYYY
-      day: entry.date.slice(8), // just DD
+      fullDate: entry.date,
+      day: entry.date.slice(5), // remove year for brevity (MM-DD)
       points: entry.points
     }));
     setChartData(formatted);
@@ -102,15 +85,12 @@ const App: React.FC = () => {
     const channel = supabase
       .channel('public:daily_logs')
       .on('postgres_changes', { event: '*', schema: 'public', table: TABLE_NAME }, (payload) => {
-        // Optimisation: Only refetch history generally, but be careful overwriting current day 
-        // if we are the ones editing it.
+        // Refresh history on any change
         fetchHistory();
         
-        // If the change is about the current date, we might need to update,
-        // BUT checking against local state avoids "bouncing" if we just saved it.
-        if ((payload.new as any)?.date === currentDate) {
-             // Optional: Logic to merge changes if multi-user, 
-             // currently we trust the optimistic update for the active user.
+        // If the change affects the current view, refresh current day
+        if ((payload.new as any)?.date === currentDate || (payload.old as any)?.date === currentDate) {
+             fetchDayData(currentDate);
         }
       })
       .subscribe();
@@ -124,70 +104,44 @@ const App: React.FC = () => {
   const handleToggleTask = async (taskId: string) => {
     if (!supabase) return;
 
-    // 1. Calculate new state based on REF (current truth) to avoid race conditions
-    const currentTasks = tasksRef.current;
-    const newTasks = { ...currentTasks, [taskId]: !currentTasks[taskId] };
-    
-    // 2. Optimistic update
+    const newTasks = { ...dailyTasks, [taskId]: !dailyTasks[taskId] };
+    // Optimistic update
     setDailyTasks(newTasks);
-    setSaveStatus('saving');
 
     const points = Object.values(newTasks).filter(Boolean).length;
 
-    // 3. Send to Supabase
-    try {
-        const { error } = await supabase
-        .from(TABLE_NAME)
-        .upsert({
-            date: currentDate,
-            tasks: newTasks,
-            points: points,
-            created_at: new Date().toISOString()
-        });
+    // Upsert to Supabase
+    const { error } = await supabase
+      .from(TABLE_NAME)
+      .upsert({
+        date: currentDate,
+        tasks: newTasks,
+        points: points,
+        created_at: new Date().toISOString() // updates timestamp on edit
+      });
 
-        if (error) {
-            throw error;
-        }
-
-        setSaveStatus('saved');
-        setTimeout(() => setSaveStatus('idle'), 2000);
-    } catch (error) {
-        console.error('Error updating task:', error);
-        // Revert optimistic update on error
-        setDailyTasks(currentTasks);
-        setSaveStatus('error');
-        setTimeout(() => setSaveStatus('idle'), 3000);
+    if (error) {
+      console.error('Error updating task:', error);
+      // Revert on error would go here in a more complex app
     }
   };
 
   // Reset Day
   const handleResetDay = async () => {
     if (!supabase) return;
-    if (!window.confirm(`Tem certeza que deseja zerar o progresso do dia ${currentDate}?`)) return;
-
-    setSaveStatus('saving');
-    
-    // Explicitly sending empty object
-    const emptyTasks = {};
-    setDailyTasks(emptyTasks); // Optimistic
+    if (!window.confirm(`Are you sure you want to reset all progress for ${currentDate}?`)) return;
 
     const { error } = await supabase
       .from(TABLE_NAME)
       .upsert({
         date: currentDate,
-        tasks: emptyTasks,
+        tasks: {},
         points: 0
-      }); 
+      }); // effectively clears it. Could also use DELETE.
     
     if (!error) {
+      setDailyTasks({});
       setShowResetMenu(false);
-      setSaveStatus('saved');
-      fetchHistory(); // Refresh chart
-      setTimeout(() => setSaveStatus('idle'), 2000);
-    } else {
-      console.error("Reset Day Error:", error);
-      setSaveStatus('error');
-      alert("Erro ao resetar. Verifique se rodou o SQL de permissões.");
     }
   };
 
@@ -195,26 +149,20 @@ const App: React.FC = () => {
   const handleResetApp = async () => {
     if (!supabase) return;
 
-    const code = prompt("Digite 'DELETAR' para confirmar que deseja apagar TODO o histórico.");
-    if (code !== 'DELETAR') return;
+    const code = prompt("Type 'DELETE' to confirm erasing ALL data forever.");
+    if (code !== 'DELETE') return;
 
-    setSaveStatus('saving');
-
-    // Using delete with a generic filter that matches everything
-    // Note: RLS Policy must allow DELETE for this to work
+    // Supabase client usually blocks truncate for anon unless configured in Postgres RLS/Policies
+    // We use a simple delete loop or delete where query to clear data
     const { error } = await supabase
       .from(TABLE_NAME)
       .delete()
-      .neq('date', '0000-00-00'); // Deletes all rows where date is not dummy value
+      .neq('date', '0000-00-00'); // Hack to match all rows if TRUNCATE isn't available via API
 
     if (error) {
-      alert('Erro ao resetar app. Verifique se você rodou o novo código SQL no Supabase para permitir DELETE.');
-      console.error("Reset App Error:", error);
-      setSaveStatus('error');
+      alert('Error resetting app. Check RLS policies or API permissions.');
+      console.error(error);
     } else {
-      setDailyTasks({});
-      setChartData([]);
-      setSaveStatus('saved');
       window.location.reload();
     }
   };
@@ -233,15 +181,11 @@ const App: React.FC = () => {
     <div className="min-h-screen bg-slate-950 text-slate-200 p-4 md:p-8 pb-24 font-sans">
       <div className="max-w-5xl mx-auto">
         
-        <Header 
-          currentDate={currentDate} 
-          onDateChange={setCurrentDate} 
-          saveStatus={saveStatus}
-        />
+        <Header currentDate={currentDate} onDateChange={setCurrentDate} />
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <Section 
-            title="Manhã" 
+            title="Morning" 
             tasks={morningTasks} 
             completedTasks={dailyTasks} 
             onToggleTask={handleToggleTask}
@@ -249,7 +193,7 @@ const App: React.FC = () => {
             colorClass="text-amber-400"
           />
           <Section 
-            title="Tarde" 
+            title="Afternoon" 
             tasks={afternoonTasks} 
             completedTasks={dailyTasks} 
             onToggleTask={handleToggleTask}
@@ -257,7 +201,7 @@ const App: React.FC = () => {
             colorClass="text-orange-500"
           />
           <Section 
-            title="Noite" 
+            title="Night" 
             tasks={nightTasks} 
             completedTasks={dailyTasks} 
             onToggleTask={handleToggleTask}
@@ -269,34 +213,34 @@ const App: React.FC = () => {
         <Stats data={chartData} todayPoints={currentPoints} />
 
         {/* Footer / Reset Controls */}
-        <div className="mt-12 pt-8 border-t border-slate-900 flex flex-col items-center">
+        <div className="mt-12 pt-8 border-t border-slate-900 flex justify-center">
           {!showResetMenu ? (
             <button 
               onClick={() => setShowResetMenu(true)}
-              className="text-slate-600 text-sm hover:text-slate-400 flex items-center gap-2 transition-colors px-4 py-2 rounded-lg hover:bg-slate-900"
+              className="text-slate-600 text-sm hover:text-slate-400 flex items-center gap-2 transition-colors"
             >
-              <RotateCcw size={14} /> Gerenciar Dados
+              <RotateCcw size={14} /> Manage Data
             </button>
           ) : (
-            <div className="flex flex-col sm:flex-row items-center gap-4 bg-slate-900 p-3 rounded-xl border border-slate-800 animate-in fade-in slide-in-from-bottom-2 shadow-2xl">
+            <div className="flex items-center gap-4 bg-slate-900 p-2 rounded-lg border border-slate-800 animate-in fade-in slide-in-from-bottom-2">
               <button 
                 onClick={handleResetDay}
-                className="w-full sm:w-auto px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm rounded-md transition-colors flex items-center justify-center gap-2"
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm rounded-md transition-colors flex items-center gap-2"
               >
-                <RotateCcw size={14} /> Resetar Hoje
+                <RotateCcw size={14} /> Reset This Day
               </button>
-              <div className="hidden sm:block w-px h-4 bg-slate-700"></div>
+              <div className="w-px h-4 bg-slate-700"></div>
               <button 
                 onClick={handleResetApp}
-                className="w-full sm:w-auto px-4 py-2 bg-red-950/30 hover:bg-red-900/40 text-red-400 border border-red-900/50 text-sm rounded-md transition-colors flex items-center justify-center gap-2"
+                className="px-4 py-2 bg-red-900/20 hover:bg-red-900/40 text-red-400 border border-red-900/50 text-sm rounded-md transition-colors flex items-center gap-2"
               >
-                <Trash2 size={14} /> Resetar Tudo
+                <AlertOctagon size={14} /> Reset Everything
               </button>
               <button 
                 onClick={() => setShowResetMenu(false)}
-                className="text-xs text-slate-500 hover:text-slate-300 mt-2 sm:mt-0 sm:ml-2 underline decoration-dotted"
+                className="ml-2 text-slate-500 hover:text-slate-300"
               >
-                Cancelar
+                Cancel
               </button>
             </div>
           )}
